@@ -125,7 +125,7 @@ class ebyteE32:
                 
         GPIO.setmode(GPIO.BCM)
                 
-        print("Rpi modules imported!")
+        print("Raspberry Pi modules imported!")
                 
     except:
         pass
@@ -135,7 +135,7 @@ class ebyteE32:
         # configuration in dictionary
         self.config = {}
         
-        self.config['DTU']=DTU					   # use e32-DTU module (for outside mount)
+        self.config['DTU']=DTU                     # use e32-DTU (868L30) module (for outside mount) True/False in constructor
         self.config['platform']=Platform           # set default platform to esp32
         self.config['uart_pins'] = [rx,tx]         # get UART pins, set by  the user
         self.config['model'] = Model               # E32 model (default 868T20D)
@@ -147,7 +147,7 @@ class ebyteE32:
         self.calcFrequency()                       # calculate frequency (min frequency + channel*1 MHz)
         self.config['transmode'] = 0               # transmission mode (default 0 - tranparent)
         self.config['iomode'] = 1                  # IO mode (default 1 = not floating)
-        self.config['wtime'] = 0                  # wakeup time from sleep mode (default 0 = 250ms)
+        self.config['wtime'] = 0                   # wakeup time from sleep mode (default 0 = 250ms)
         self.config['fec'] = 1                     # forward error correction (default 1 = on)
         self.config['txpower'] = 0                 # transmission power (default 0 = 20dBm/100mW)
         # 
@@ -198,7 +198,7 @@ class ebyteE32:
                 self.serdev = self.UART(1, rx=rx, tx=tx, baudrate=self.config['baudrate'], bits=8, parity=par, stop=1)
             
             if self.config['platform'] == 'raspberry_pico':
-                #UART for esp32 can be set to any pair of pins
+                #UART for RPi Pico can be set to any pair of pins
                 if (self.config['uart_pins'][0]) is None or (self.config['uart_pins'][1]) is none:
                     rx=self.Pin(9)
                     tx=self.Pin(10)
@@ -209,30 +209,31 @@ class ebyteE32:
                 self.serdev = self.UART(1, rx=rx, tx=tx, baudrate=self.config['baudrate'], bits=8, parity=par, stop=1)
             
             if self.config['platform'] == 'raspberry_pi':
-            	
-            	#Initialize Raspberry Pi UART
-                # To avoid conflicts with RPI bluetooth attached to uart0, you should activate the other UARTs on RPI
-                # just add this line:
+            
+                #Initialize Raspberry Pi UART
+                # Raspberry Pi 4 has four UARTs
+                # To avoid conflicts with RPI bluetooth attached to uart0, 
+                # you should activate the other UARTs on RPI 4 with adding  this line to /boot/config.txt :
                 #
                 # dtoverlay=uart2 
                 #
-                # to /boot/config.txt
-            
                 # This activates uart 1 ( uart counting starts from 0)
                 # pins for uart 1 (ttyAMA1) is on pin27 (GPOI 0) for Tx and on pin28 (GPIO 7) for Rx. 
-                
-                #if you want to use uart0, add this parameters to /boot/config.txt and resboot.
+                #
+                #if you use Rpi 1,2,3 and Zero, you have to use uart0 or uart1.
+                #To use uart0 add this parameters to /boot/config.txt and reboot.
+                #
                 # dtoverlay=disable-bt
                 # enable_uart=1 
                 
-                #Here we assume you use default UART0
-                self.serdev=self.serial.Serial('/dev/serial0', 9600, timeout=0)
+                #Here we assume you use default UART0 with RPi
+                self.serdev=self.serial.Serial('/dev/serial0', baudrate=9600,  bytesize=self.serial.EIGHTBITS, parity=self.serial.PARITY_NONE, stopbits=self.serial.STOPBITS_ONE, timeout=1)
                 self.utime.sleep(1)
             
             if self.debug:
                 print(self.serdev)
                 
-            # make operation mode & device status instances
+            # make operation mode & device status instances, but ignore m0,m1 and aux as they are physical switches on DTU
             if self.config['DTU'] == False:
                 self.M0 = self.Pin(self.PinM0, self.Pin.OUT)
                 self.M1 = self.Pin(self.PinM1, self.Pin.OUT)
@@ -255,7 +256,7 @@ class ebyteE32:
             The payload can be appended with a 2's complement checksum to validate correct transmission.
             - transparent mode : all modules with the same address and channel of the transmitter will receive the payload
             - fixed mode : only the module with this address and channel will receive the payload;
-                           if the address is 0xFFFF all modules with the same channel will receive the payload'''
+        if the address is 0xFFFF all modules with the same channel will receive the payload'''
         try:
             # type of transmission
             if (to_address == self.config['address']) and (to_channel == self.config['channel']):
@@ -369,7 +370,6 @@ class ebyteE32:
                 print("error on reset", E)
             return "NOK"
 
-
     def stop(self):
         ''' Stop the ebyte E32 LoRa module '''
         try:
@@ -403,36 +403,33 @@ class ebyteE32:
             self.serdev.write(bytes(HexCmd))
           
             # wait for result
-            #self.utime.sleep_ms(50)
-            
-            #If we use Raspberry Pi, use pyserial in_waiting
+            #If we use Raspberry Pi, use pyserial's in_waiting
             if self.config['platform'] == 'raspberry_pi':
-                if self.serdev.in_waiting:
+                
+                while self.serdev.in_waiting:
                     # read result
                     if command == 'reset':
                         result = ''
                     else:
                         result = self.serdev.read()
-                        # wait for result
-                        #self.utime.sleep_ms(50)
-                        # debug
+                        
                         if self.debug:
                             print(result)
                 else:
                     result=''
                 return result
-        
-            else: # else, we assume its a microcontroller and use machine.UART dunction any()
-                if self.serdev.any():
+    
+            # else, we assume it's a microcontroller and use machine.UART's any()
+            else:
+                
+                while self.serdev.any():
                 
                     # read result
                     if command == 'reset':
                         result = ''
                     else:
                         result = self.serdev.read()
-                        # wait for result
-                        #self.utime.sleep_ms(50)
-                        # debug
+
                         if self.debug:
                             print(result)
                 else:
@@ -641,8 +638,10 @@ class ebyteE32:
 
     def setOperationMode(self, mode):
         ''' Set operation mode of the E32 LoRa module '''
+        
         # get operation mode settings (default normal)
         bits = ebyteE32.OPERMODE.get(mode, '00')
+        
         # set operation mode
         if self.config['DTU'] == False:
             self.M0.value(int(bits[0]))
