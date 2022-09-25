@@ -58,16 +58,11 @@
 #
 ######################################################################
 
-from machine import Pin, UART
-import utime
-import ujson
-
-
 class ebyteE32:
     ''' class to interface an ESP32 via serial commands to the EBYTE E32 Series LoRa modules '''
     
-    # UART ports
-    PORT = { 'U1':1, 'U2':2 }
+    #PLATFORM
+    PLATFORM = ['esp8266','esp32','raspberry_pico','raspberry_pi']
     # UART parity strings
     PARSTR = { '8N1':'00', '8O1':'01', '8E1':'10' }
     PARINV = { v:k for k, v in PARSTR.items() }
@@ -103,7 +98,7 @@ class ebyteE32:
     IOMODE = { 0:'TXD AUX floating output, RXD floating input',
                1:'TXD AUX push-pull output, RXD pull-up input' }
     # wireless wakeup times from sleep mode
-    WUTIME = { 0b000:'250ms', 0b001:'500ms', 0b010:'750ms', 0b011:'1000ms',
+    wtime = { 0b000:'250ms', 0b001:'500ms', 0b010:'750ms', 0b011:'1000ms',
                0b100:'1250ms', 0b101:'1500ms', 0b110:'1750ms', 0b111:'2000ms' }
     # Forward Error Correction (FEC) mode
     FEC = { 0:'off', 1:'on' }
@@ -112,14 +107,38 @@ class ebyteE32:
                 0b01:['17dBm', '24dBm', '27dBm'],
                 0b10:['14dBm', '21dBm', '24dBm'],
                 0b11:['10dBm', '18dBm', '21dBm'] }
-    
 
-    def __init__(self, PinM0, PinM1, PinAUX, Model='868T20D', Port='U1', Baudrate=9600, Parity='8N1', AirDataRate='2.4k', Address=0x0000, Channel=0x06, debug=False):
+#import modules depending on the platform  
+    try:
+        from machine import Pin, UART
+        import utime
+        import ujson
+    except:
+        print("Microcontroler modules imported!")
+        pass
+            
+    try:
+        import time as utime
+        import json as ujson
+        import serial # pip3 install pyserial
+        import RPi.GPIO as GPIO
+                
+        GPIO.setmode(GPIO.BCM)
+                
+        print("Rpi modules imported!")
+                
+    except:
+        pass
+        
+    def __init__(self, PinM0, PinM1, PinAUX, Model='868T20D', Platform='raspberry_pi', rx=None,tx=None, Baudrate=9600, Parity='8N1', AirDataRate='2.4k', Address=0x0000, Channel=0x06, debug=False, DTU=False):
         ''' constructor for ebyte E32 LoRa module '''
         # configuration in dictionary
         self.config = {}
+        
+        self.config['DTU']=DTU					   # use e32-DTU module (for outside mount)
+        self.config['platform']=Platform           # set default platform to esp32
+        self.config['uart_pins'] = [rx,tx]         # get UART pins, set by  the user
         self.config['model'] = Model               # E32 model (default 868T20D)
-        self.config['port'] = Port                 # UART channel on the ESP (default U1)
         self.config['baudrate'] = Baudrate         # UART baudrate (default 9600)
         self.config['parity'] = Parity             # UART Parity (default 8N1)
         self.config['datarate'] = AirDataRate      # wireless baudrate (default 2.4k)
@@ -128,7 +147,7 @@ class ebyteE32:
         self.calcFrequency()                       # calculate frequency (min frequency + channel*1 MHz)
         self.config['transmode'] = 0               # transmission mode (default 0 - tranparent)
         self.config['iomode'] = 1                  # IO mode (default 1 = not floating)
-        self.config['wutime'] = 0                  # wakeup time from sleep mode (default 0 = 250ms)
+        self.config['wtime'] = 0                  # wakeup time from sleep mode (default 0 = 250ms)
         self.config['fec'] = 1                     # forward error correction (default 1 = on)
         self.config['txpower'] = 0                 # transmission power (default 0 = 20dBm/100mW)
         # 
@@ -141,15 +160,13 @@ class ebyteE32:
         self.serdev = None                         # instance for UART
         self.debug = debug
         
-
     def start(self):
         ''' Start the ebyte E32 LoRa module '''
         try:
             # check parameters
             if int(self.config['model'].split('T')[0]) not in ebyteE32.FREQ:
-                self.config['model'] = '868T20D'
-            if self.config['port'] not in ebyteE32.PORT:
-                self.config['port'] = 'U1'
+                self.config['model'] = '868T20D' 
+            
             if int(self.config['baudrate']) not in ebyteE32.BAUDRATE:    
                 self.config['baudrate'] = 9600
             if self.config['parity'] not in ebyteE32.PARSTR:
@@ -158,21 +175,72 @@ class ebyteE32:
                 self.config['datarate'] = '2.4k'
             if self.config['channel'] > 31:
                 self.config['channel'] = 31
-            # make UART instance
-            self.serdev = UART(ebyteE32.PORT.get(self.config['port']))
-            # init UART
+           
+           # make UART instance depending on the Platform
+           
             par = ebyteE32.PARBIT.get(str(self.config['parity'])[1])
-            self.serdev.init(baudrate=self.config['baudrate'], bits=8, parity=par, stop=1)
+            
+            
+            if self.config['platform'] == 'esp8266':
+                #no choice for pins here, set uart0 (default pins tx=1, rx=3)
+                self.serdev = self.UART(0, baudrate=self.config['baudrate'], bits=8, parity=par, stop=1)
+                
+            if self.config['platform'] == 'esp32':
+                # hw UART for esp32 can be set to any pair of pins
+                # if no pins are provided, fallback to default uart 1 pins
+                if (self.config['uart_pins'][0]) is None or (self.config['uart_pins'][1]) is none:
+                    rx=9
+                    tx=10
+                else:
+                    rx=self.config['uart_pins'][0]
+                    tx=self.config['uart_pins'][1]
+                    
+                self.serdev = self.UART(1, rx=rx, tx=tx, baudrate=self.config['baudrate'], bits=8, parity=par, stop=1)
+            
+            if self.config['platform'] == 'raspberry_pico':
+                #UART for esp32 can be set to any pair of pins
+                if (self.config['uart_pins'][0]) is None or (self.config['uart_pins'][1]) is none:
+                    rx=self.Pin(9)
+                    tx=self.Pin(10)
+                else:
+                    rx=self.Pin(self.config['uart_pins'][0])
+                    tx=self.Pin(self.config['uart_pins'][1])
+                
+                self.serdev = self.UART(1, rx=rx, tx=tx, baudrate=self.config['baudrate'], bits=8, parity=par, stop=1)
+            
+            if self.config['platform'] == 'raspberry_pi':
+            	
+            	#Initialize Raspberry Pi UART
+                # To avoid conflicts with RPI bluetooth attached to uart0, you should activate the other UARTs on RPI
+                # just add this line:
+                #
+                # dtoverlay=uart2 
+                #
+                # to /boot/config.txt
+            
+                # This activates uart 1 ( uart counting starts from 0)
+                # pins for uart 1 (ttyAMA1) is on pin27 (GPOI 0) for Tx and on pin28 (GPIO 7) for Rx. 
+                
+                #if you want to use uart0, add this parameters to /boot/config.txt and resboot.
+                # dtoverlay=disable-bt
+                # enable_uart=1 
+                
+                #Here we assume you use default UART0
+                self.serdev=self.serial.Serial('/dev/serial0', 9600, timeout=0)
+                self.utime.sleep(1)
+            
             if self.debug:
                 print(self.serdev)
+                
             # make operation mode & device status instances
-            self.M0 = Pin(self.PinM0, Pin.OUT)
-            self.M1 = Pin(self.PinM1, Pin.OUT)
-            self.AUX = Pin(self.PinAUX, Pin.IN, Pin.PULL_UP)
-            if self.debug:
-                print(self.M0, self.M1, self.AUX)
+            if self.config['DTU'] == False:
+                self.M0 = self.Pin(self.PinM0, self.Pin.OUT)
+                self.M1 = self.Pin(self.PinM1, self.Pin.OUT)
+                self.AUX = self.Pin(self.PinAUX, self.Pin.IN, self.Pin.PULL_UP)
+                if self.debug:
+                    print(self.M0.value(), self.M1.value(), self.AUX.value())
             # set config to the ebyte E32 LoRa module
-            self.setConfig('setConfigPwrDwnSave')
+            #self.setConfig('setConfigPwrDwnSave')
             return "OK"
         
         except Exception as E:
@@ -210,7 +278,7 @@ class ebyteE32:
                 msg.append(to_address//256)          # high address byte
                 msg.append(to_address%256)           # low address byte
                 msg.append(to_channel)               # channel
-            js_payload = ujson.dumps(payload)     # convert payload to JSON string 
+            js_payload = self.ujson.dumps(payload)     # convert payload to JSON string 
             for i in range(len(js_payload)):      # message
                 msg.append(ord(js_payload[i]))    # ascii code of character
             if useChecksum:                       # attach 2's complement checksum
@@ -273,7 +341,7 @@ class ebyteE32:
                         # message ok, remove checksum
                         msg = msg[:-1]
                 # JSON to dictionary
-                message = ujson.loads(msg)
+                message = self.ujson.loads(msg)
                 return message
         
         except Exception as E:
@@ -306,7 +374,7 @@ class ebyteE32:
         ''' Stop the ebyte E32 LoRa module '''
         try:
             if self.serdev != None:
-                self.serdev.deinit()
+                #self.serdev.deinit()
                 del self.serdev
             return "OK"
             
@@ -333,19 +401,43 @@ class ebyteE32:
             if self.debug:
                 print(HexCmd)
             self.serdev.write(bytes(HexCmd))
+          
             # wait for result
-            utime.sleep_ms(50)
-            # read result
-            if command == 'reset':
-                result = ''
-            else:
-                result = self.serdev.read()
-                # wait for result
-                utime.sleep_ms(50)
-                # debug
-                if self.debug:
-                    print(result)
-            return result
+            #self.utime.sleep_ms(50)
+            
+            #If we use Raspberry Pi, use pyserial in_waiting
+            if self.config['platform'] == 'raspberry_pi':
+                if self.serdev.in_waiting:
+                    # read result
+                    if command == 'reset':
+                        result = ''
+                    else:
+                        result = self.serdev.read()
+                        # wait for result
+                        #self.utime.sleep_ms(50)
+                        # debug
+                        if self.debug:
+                            print(result)
+                else:
+                    result=''
+                return result
+        
+            else: # else, we assume its a microcontroller and use machine.UART dunction any()
+                if self.serdev.any():
+                
+                    # read result
+                    if command == 'reset':
+                        result = ''
+                    else:
+                        result = self.serdev.read()
+                        # wait for result
+                        #self.utime.sleep_ms(50)
+                        # debug
+                        if self.debug:
+                            print(result)
+                else:
+                    result=''
+                return result
         
         except Exception as E:
             if self.debug:
@@ -412,11 +504,11 @@ class ebyteE32:
         self.config['datarate'] = ebyteE32.DATARINV.get(bits[5:])
         # message byte 4 = channel
         self.config['channel'] = int(message[4])
-        # message byte 5 = option (transmode, iomode, wutime, fec, txpower)
+        # message byte 5 = option (transmode, iomode, wtime, fec, txpower)
         bits = '{0:08b}'.format(message[5])
         self.config['transmode'] = int(bits[0:1])
         self.config['iomode'] = int(bits[1:2])
-        self.config['wutime'] = int(bits[2:5])
+        self.config['wtime'] = int(bits[2:5])
         self.config['fec'] = int(bits[5:6])
         self.config['txpower'] = int(bits[6:])
         
@@ -439,11 +531,11 @@ class ebyteE32:
         message.append(int(bits))
         # message byte 4 = channel
         message.append(self.config['channel'])
-        # message byte 5 = option (transmode, iomode, wutime, fec, txpower)
+        # message byte 5 = option (transmode, iomode, wtime, fec, txpower)
         bits = '0b'
         bits += str(self.config['transmode'])
         bits += str(self.config['iomode'])
-        bits += '{0:03b}'.format(self.config['wutime'])
+        bits += '{0:03b}'.format(self.config['wtime'])
         bits += str(self.config['fec'])
         bits += '{0:02b}'.format(self.config['txpower'])
         message.append(int(bits))
@@ -463,7 +555,7 @@ class ebyteE32:
         print('parity      \t%s'%(self.config['parity']))
         print('transmission\t%s'%(ebyteE32.TRANSMODE.get(self.config['transmode'])))
         print('IO mode     \t%s'%(ebyteE32.IOMODE.get(self.config['iomode'])))
-        print('wakeup time \t%s'%(ebyteE32.WUTIME.get(self.config['wutime'])))
+        print('wakeup time \t%s'%(ebyteE32.wtime.get(self.config['wtime'])))
         print('FEC         \t%s'%(ebyteE32.FEC.get(self.config['fec'])))
         maxp = ebyteE32.MAXPOW.get(self.config['model'][3:6], 0)
         print('TX power    \t%s'%(ebyteE32.TXPOWER.get(self.config['txpower'])[maxp]))
@@ -474,26 +566,29 @@ class ebyteE32:
         ''' Wait for the E32 LoRa module to become idle (AUX pin high) '''
         count = 0
         # loop for device busy
-        while not self.AUX.value():
-            # increment count
-            count += 1
-            # maximum wait time 100 ms
-            if count == 10:
-                break
-            # sleep for 10 ms
-            utime.sleep_ms(10)
+        if self.config['DTU']==False:
+            while not self.AUX.value():
+                # increment count
+                count += 1
+                # maximum wait time 100 ms
+                if count == 10:
+                    break
+                # sleep for 10 ms
+                self.utime.sleep_ms(10)
+        else:
+            self.utime.sleep(2)
             
             
     def saveConfigToJson(self):
         ''' Save config dictionary to JSON file ''' 
         with open('E32config.json', 'w') as outfile:  
-            ujson.dump(self.config, outfile)    
+            self.ujson.dump(self.config, outfile)    
 
 
     def loadConfigFromJson(self):
         ''' Load config dictionary from JSON file ''' 
         with open('E32config.json', 'r') as infile:
-            result = ujson.load(infile)
+            result = self.ujson.load(infile)
         print(self.config)
         
     
@@ -525,6 +620,7 @@ class ebyteE32:
             # send the command
             result = self.sendCommand(save_cmd)
             # check result
+            print(result)
             if len(result) != 6:
                 return "NOK"
             # debug
@@ -548,9 +644,10 @@ class ebyteE32:
         # get operation mode settings (default normal)
         bits = ebyteE32.OPERMODE.get(mode, '00')
         # set operation mode
-        self.M0.value(int(bits[0]))
-        self.M1.value(int(bits[1]))
-        # wait a moment
-        utime.sleep_ms(50)
-        
-    
+        if self.config['DTU'] == False:
+            self.M0.value(int(bits[0]))
+            self.M1.value(int(bits[1]))
+            # wait a moment
+            self.utime.sleep_ms(50)
+        else:
+            self.utime.sleep(0.05)
