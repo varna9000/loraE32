@@ -211,6 +211,9 @@ class ebyteE32:
             if self.config['platform'] == 'raspberry_pi':
             
                 #Initialize Raspberry Pi UART
+                
+                # You have to `pip3 install pyserial`
+                
                 # Raspberry Pi 4 has four UARTs
                 # To avoid conflicts with RPI bluetooth attached to uart0, 
                 # you should activate the other UARTs on RPI 4 with adding  this line to /boot/config.txt :
