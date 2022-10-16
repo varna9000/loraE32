@@ -113,8 +113,8 @@ class ebyteE32:
         from machine import Pin, UART
         import utime
         import ujson
-    except:
         print("Microcontroler modules imported!")
+    except:
         pass
             
     try:
@@ -123,8 +123,7 @@ class ebyteE32:
         import serial # pip3 install pyserial
         import RPi.GPIO as GPIO
                 
-        GPIO.setmode(GPIO.BCM)
-                
+        GPIO.setmode(GPIO.BCM)    
         print("Raspberry Pi modules imported!")
                 
     except:
@@ -188,18 +187,18 @@ class ebyteE32:
             if self.config['platform'] == 'esp32':
                 # hw UART for esp32 can be set to any pair of pins
                 # if no pins are provided, fallback to default uart 1 pins
-                if (self.config['uart_pins'][0]) is None or (self.config['uart_pins'][1]) is none:
-                    rx=9
-                    tx=10
+                if (self.config['uart_pins'][0] is None) or (self.config['uart_pins'][1] is None):
+                    rx=16
+                    tx=17
                 else:
                     rx=self.config['uart_pins'][0]
                     tx=self.config['uart_pins'][1]
                     
-                self.serdev = self.UART(1, rx=rx, tx=tx, baudrate=self.config['baudrate'], bits=8, parity=par, stop=1)
+                self.serdev = self.UART(2, rx=rx, tx=tx, baudrate=self.config['baudrate'], bits=8, parity=par, stop=1)
             
             if self.config['platform'] == 'raspberry_pico':
                 #UART for RPi Pico can be set to any pair of pins
-                if (self.config['uart_pins'][0]) is None or (self.config['uart_pins'][1]) is none:
+                if (self.config['uart_pins'][0] is None) or (self.config['uart_pins'][1] is None):
                     rx=self.Pin(9)
                     tx=self.Pin(10)
                 else:
@@ -211,9 +210,6 @@ class ebyteE32:
             if self.config['platform'] == 'raspberry_pi':
             
                 #Initialize Raspberry Pi UART
-                
-                # You have to `pip3 install pyserial`
-                
                 # Raspberry Pi 4 has four UARTs
                 # To avoid conflicts with RPI bluetooth attached to uart0, 
                 # you should activate the other UARTs on RPI 4 with adding  this line to /boot/config.txt :
@@ -322,12 +318,14 @@ class ebyteE32:
             # put into normal mode
             self.setOperationMode('normal')
             # receive message
+            
             js_payload = self.serdev.read()
             # debug
             if self.debug:
-                print(js_payload)
+                print("\nPayload: %s" % js_payload)
+                
             # did we receive anything ?
-            if js_payload == None:
+            if js_payload == b'' or js_payload == None:
                 # nothing
                 return { 'msg':None }
             else :
@@ -349,6 +347,7 @@ class ebyteE32:
                 return message
         
         except Exception as E:
+            raise
             if self.debug:
                 print('Error on recvMessage: ',E)
             return "NOK"
@@ -406,26 +405,27 @@ class ebyteE32:
             self.serdev.write(bytes(HexCmd))
           
             # wait for result
+            self.utime.sleep(0.05)
+            
             #If we use Raspberry Pi, use pyserial's in_waiting
             if self.config['platform'] == 'raspberry_pi':
                 
-                while self.serdev.in_waiting:
+                if self.serdev.in_waiting:
                     # read result
                     if command == 'reset':
                         result = ''
                     else:
-                        result = self.serdev.read()
+                        result = self.serdev.readline()
                         
                         if self.debug:
                             print(result)
-                else:
-                    result=''
+                
                 return result
     
             # else, we assume it's a microcontroller and use machine.UART's any()
             else:
-                
-                while self.serdev.any():
+                #self.utime.sleep_ms(50)
+                if self.serdev.any():
                 
                     # read result
                     if command == 'reset':
@@ -477,6 +477,7 @@ class ebyteE32:
             # send the command
             result = self.sendCommand('getConfig')
             # check result
+            print("len %s" %len(result))
             if len(result) != 6:
                 return "NOK"
             # decode result
@@ -528,7 +529,12 @@ class ebyteE32:
         bits += ebyteE32.PARSTR.get(self.config['parity'])
         bits += ebyteE32.BAUDRATE.get(self.config['baudrate'])
         bits += ebyteE32.DATARATE.get(self.config['datarate'])
-        message.append(int(bits))
+        
+        if self.config['platform'] == 'raspberry_pi':
+        	message.append(int(bits,2))
+        else:
+        	message.append(int(bits))
+
         # message byte 4 = channel
         message.append(self.config['channel'])
         # message byte 5 = option (transmode, iomode, wtime, fec, txpower)
@@ -538,19 +544,24 @@ class ebyteE32:
         bits += '{0:03b}'.format(self.config['wtime'])
         bits += str(self.config['fec'])
         bits += '{0:02b}'.format(self.config['txpower'])
-        message.append(int(bits))
+        
+        if self.config['platform'] == 'raspberry_pi':
+        	message.append(int(bits,2))
+        else:
+        	message.append(int(bits))
+        	
         return message
     
 
     def showConfig(self):
         ''' Show the config parameters of the ebyte E32 LoRa module on the shell '''
         print('=================== CONFIG =====================')
+        print('platform    \t%s'%(self.config['platform']))
         print('model       \tE32-%s'%(self.config['model']))
         print('frequency   \t%dMhz'%(self.config['frequency']))
         print('address     \t0x%04x'%(self.config['address']))
         print('channel     \t0x%02x'%(self.config['channel']))
         print('datarate    \t%sbps'%(self.config['datarate']))                
-        print('port        \t%s'%(self.config['port']))
         print('baudrate    \t%dbps'%(self.config['baudrate']))
         print('parity      \t%s'%(self.config['parity']))
         print('transmission\t%s'%(ebyteE32.TRANSMODE.get(self.config['transmode'])))
