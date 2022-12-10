@@ -274,6 +274,7 @@ class ebyteE32:
                 return 'NOK'
             # encode message
             msg = []
+            #self.config['transmode'] == 0
             if self.config['transmode'] == 1:     # only for fixed transmission mode
                 msg.append(to_address//256)          # high address byte
                 msg.append(to_address%256)           # low address byte
@@ -319,7 +320,12 @@ class ebyteE32:
             self.setOperationMode('normal')
             # receive message
             
-            js_payload = self.serdev.read()
+            self.utime.sleep(0.05)
+            if self.serdev.in_waiting:
+                js_payload = self.serdev.readline()
+            else:
+                js_payload = None
+                
             # debug
             if self.debug:
                 print("\nPayload: %s" % js_payload)
@@ -327,7 +333,7 @@ class ebyteE32:
             # did we receive anything ?
             if js_payload == b'' or js_payload == None:
                 # nothing
-                return { 'msg':None }
+                return { "msg": None }
             else :
                 # decode message
                 msg = ''
@@ -338,11 +344,12 @@ class ebyteE32:
                     cs = int(self.calcChecksum(msg),16)
                     if cs != 0:
                         # corrupt
-                        return { 'msg':'corrupt message, checksum ' + str(cs) }
+                        return { "msg":"corrupt message, checksum " + str(cs) }
                     else:
                         # message ok, remove checksum
                         msg = msg[:-1]
                 # JSON to dictionary
+                print(msg)
                 message = self.ujson.loads(msg)
                 return message
         
@@ -401,7 +408,7 @@ class ebyteE32:
             else:                             # get config, get version, reset
                 HexCmd = [HexCmd]*3
             if self.debug:
-                print(HexCmd)
+                print(bytes(HexCmd))
             self.serdev.write(bytes(HexCmd))
           
             # wait for result
@@ -420,7 +427,7 @@ class ebyteE32:
                         if self.debug:
                             print(result)
                 
-                return result
+                    return result
     
             # else, we assume it's a microcontroller and use machine.UART's any()
             else:
@@ -431,7 +438,7 @@ class ebyteE32:
                     if command == 'reset':
                         result = ''
                     else:
-                        result = self.serdev.read()
+                        result = self.serdev.readline()
 
                         if self.debug:
                             print(result)
@@ -531,9 +538,9 @@ class ebyteE32:
         bits += ebyteE32.DATARATE.get(self.config['datarate'])
         
         if self.config['platform'] == 'raspberry_pi':
-        	message.append(int(bits,2))
+            message.append(int(bits,2))
         else:
-        	message.append(int(bits))
+            message.append(int(bits))
 
         # message byte 4 = channel
         message.append(self.config['channel'])
@@ -546,10 +553,10 @@ class ebyteE32:
         bits += '{0:02b}'.format(self.config['txpower'])
         
         if self.config['platform'] == 'raspberry_pi':
-        	message.append(int(bits,2))
+            message.append(int(bits,2))
         else:
-        	message.append(int(bits))
-        	
+            message.append(int(bits))
+        
         return message
     
 
@@ -631,7 +638,6 @@ class ebyteE32:
             # send the command
             result = self.sendCommand(save_cmd)
             # check result
-            print(result)
             if len(result) != 6:
                 return "NOK"
             # debug
